@@ -465,10 +465,51 @@ exceptionBlock : (exceptionHandler)* ('else' statementList)? ;
 // Exception handlers: on Exception do statement
 exceptionHandler : 'on' (IDENT ':')? typeId 'do' statement ;
 
-// Inline assembly blocks
-assemblerStatement : 'asm' assemblerCode 'end' ;
+// Inline assembly blocks with proper x86/x64 syntax
+assemblerStatement : 'asm' assemblerInstructionList 'end' ;
 
-assemblerCode : ~('end')* ;
+assemblerInstructionList : (assemblerInstruction | assemblerLabel | assemblerComment | assemblerDirective)* ;
+
+assemblerInstruction : mnemonicName (operandList)? ;
+
+mnemonicName : ASM_INSTRUCTION ;
+
+operandList : operand (',' operand)* ;
+
+operand : register
+        | immediate
+        | memoryOperand
+        | pascalIdentifier       // Access to Pascal variables
+        | assemblerExpression ;
+
+register : ASM_REGISTER ;
+
+immediate : ASM_NUMBER | ASM_HEX_NUMBER ;
+
+// Memory operands: [eax], [ebp+8], [eax+ebx*2+4]
+memoryOperand : '[' memoryExpression ']' ;
+
+memoryExpression : register
+                 | register ('+' | '-') immediate
+                 | register ('+' | '-') register
+                 | register ('+' | '-') register '*' scaleFactor
+                 | register ('+' | '-') register '*' scaleFactor ('+' | '-') immediate ;
+
+scaleFactor : '1' | '2' | '4' | '8' ;
+
+// Pascal variable/constant access in assembly
+pascalIdentifier : IDENT ;
+
+assemblerExpression : operand (asmOperator operand)* ;
+
+asmOperator : '+' | '-' | '*' | '/' | 'and' | 'or' | 'xor' | 'shl' | 'shr' ;
+
+// Assembly labels: @@Label:
+assemblerLabel : ASM_LABEL ':' ;
+
+assemblerComment : ASM_COMMENT ;
+
+assemblerDirective : ASM_DIRECTIVE ;
 
 // Expression hierarchy: relational -> additive -> multiplicative -> factors
 expression : simpleExpression (relOp simpleExpression)? ;
