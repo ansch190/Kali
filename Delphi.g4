@@ -2,42 +2,51 @@ grammar Delphi;
 
 // ===================================================================
 // DELPHI GRAMMAR for Version 12.3+ (2025)
-// 
+//
 // Complete ANTLR4 grammar for modern Delphi language
 // Supports: Inline Variables, Generics, Attributes, Helper Types,
 // Anonymous Methods, Operator Overloading and current features
 // ===================================================================
 
+// -------------------------------------------------------------------
+// TOP-LEVEL FILE STRUCTURE
+// -------------------------------------------------------------------
+
 // Main file structure - programs, units, libraries or packages
 file : (program_ | unit_ | library_ | package_) EOF ;
 
 // Program structure: program Name; uses...; declarations; begin..end.
-program_ : 'program' IDENT ('(' identList ')')? ';'
-          (usesClause)?
-          (declarationSection)*
-          compoundStatement '.' ;
+program_ : 'program' qualifiedIdent ('(' identList ')')? ';'
+           (usesClause)?
+           (declarationSection)*
+           compoundStatement '.' ;
 
 // Unit structure: unit Name; interface..implementation..end.
-unit_ : 'unit' IDENT ('.' IDENT)* ';'
-       interfaceSection
-       implementationSection
-       (initializationSection)?
-       (finalizationSection)?
-       'end' '.' ;
+unit_ : 'unit' qualifiedIdent portabilityDirective* ';'
+        interfaceSection
+        implementationSection
+        (initializationSection)?
+        (finalizationSection)?
+        'end' '.' ;
 
-// Library structure: library Name; declarations; end.
+// Library structure: library Name; declarations; exports; end.
 library_ : 'library' IDENT ';'
-          (usesClause)?
-          (declarationSection)*
-          (initializationSection)?
-          (finalizationSection)?
-          'end' '.' ;
+           (usesClause)?
+           (declarationSection)*
+           (exportsClause)*
+           (initializationSection)?
+           (finalizationSection)?
+           'end' '.' ;
 
 // Package structure: package Name; requires...; contains...; end.
 package_ : 'package' IDENT ';'
-          (requiresClause)?
-          (containsClause)?
-          'end' '.' ;
+           (requiresClause)?
+           (containsClause)?
+           'end' '.' ;
+
+// -------------------------------------------------------------------
+// UNIT SECTIONS
+// -------------------------------------------------------------------
 
 // Interface section with public declarations
 interfaceSection : 'interface' (usesClause)? (interfaceDecl)* ;
@@ -51,38 +60,74 @@ initializationSection : 'initialization' statementList ;
 // Optional finalization section
 finalizationSection : 'finalization' statementList ;
 
+// -------------------------------------------------------------------
+// USES, REQUIRES, CONTAINS, EXPORTS
+// -------------------------------------------------------------------
+
 // Uses clause: uses Unit1, Unit2 in 'file.pas';
 usesClause : 'uses' usedUnit (',' usedUnit)* ';' ;
 
-usedUnit : IDENT ('.' IDENT)* ('in' STRING)? ;
+usedUnit : qualifiedIdent ('in' STRING)? ;
 
 // Package requires clause
-requiresClause : 'requires' IDENT (',' IDENT)* ';' ;
+requiresClause : 'requires' qualifiedIdent (',' qualifiedIdent)* ';' ;
 
 // Package contains clause
-containsClause : 'contains' IDENT ('in' STRING)? (',' IDENT ('in' STRING)?)* ';' ;
+containsClause : 'contains' qualifiedIdent ('in' STRING)?
+                 (',' qualifiedIdent ('in' STRING)?)* ';' ;
 
-// Interface declarations (public)
+// Exports clause for DLLs/libraries
+exportsClause : 'exports' exportItem (',' exportItem)* ';' ;
+
+exportItem : IDENT ('(' formalParameterList ')')?
+             ('name' constExpression)?
+             ('index' constExpression)?
+             ('resident')? ;
+
+// -------------------------------------------------------------------
+// INTERFACE DECLARATIONS (public)
+// -------------------------------------------------------------------
+
 interfaceDecl : constSection
+              | resourcestringSection
               | typeSection
               | varSection
-              | procedureHeading ';' (directive)*    // Forward declarations
-              | functionHeading ';' (directive)* ;
+              | threadvarSection
+              | procedureInterfaceDecl
+              | functionInterfaceDecl ;
 
-// Implementation declarations (private)
+// Forward declarations in interface: procedure/function heading + directives
+procedureInterfaceDecl : attributeSection* ('class')? procedureHeading ';' directiveList ;
+functionInterfaceDecl  : attributeSection* ('class')? functionHeading ';' directiveList ;
+
+// Zero or more directives separated by semicolons
+directiveList : (directive ';')* ;
+
+// -------------------------------------------------------------------
+// IMPLEMENTATION DECLARATIONS (private)
+// -------------------------------------------------------------------
+
 declarationSection : labelDeclSection
                    | constSection
+                   | resourcestringSection
                    | typeSection
                    | varSection
+                   | threadvarSection
+                   | exportsClause
                    | procedureDeclaration
-                   | functionDeclaration ;
+                   | functionDeclaration
+                   | constructorImpl
+                   | destructorImpl ;
 
-// Custom attributes for RTTI: [AttributeName(params)]
+// -------------------------------------------------------------------
+// CUSTOM ATTRIBUTES for RTTI: [AttributeName(params)]
+// -------------------------------------------------------------------
+
 attributeSection : '[' attributeList ']' ;
 
 attributeList : attribute (',' attribute)* ;
 
-attribute : IDENT (attributeArguments)? ;
+attribute : qualifiedIdent (attributeArguments)? ;
 
 attributeArguments : '(' (attributeArgumentList)? ')' ;
 
@@ -90,11 +135,14 @@ attributeArgumentList : attributeArgument (',' attributeArgument)* ;
 
 attributeArgument : (IDENT '=')? expression ;
 
-// Constant declarations: const NAME = value;
+// -------------------------------------------------------------------
+// CONSTANT DECLARATIONS
+// -------------------------------------------------------------------
+
 constSection : 'const' (constDeclaration)+ ;
 
-constDeclaration : attributeSection* IDENT '=' constExpression ';'
-                 | attributeSection* IDENT ':' typeId '=' typedConstant ';' ;
+constDeclaration : attributeSection* IDENT '=' constExpression portabilityDirective* ';'
+                 | attributeSection* IDENT ':' typeDefinition '=' typedConstant portabilityDirective* ';' ;
 
 constExpression : expression ;
 
@@ -111,14 +159,26 @@ recordConstant : '(' recordFieldConstant (';' recordFieldConstant)* ')' ;
 
 recordFieldConstant : IDENT ':' typedConstant ;
 
-// Type declarations: type NAME = definition;
+// -------------------------------------------------------------------
+// RESOURCESTRING DECLARATIONS
+// -------------------------------------------------------------------
+
+resourcestringSection : 'resourcestring' (resourcestringDecl)+ ;
+
+resourcestringDecl : IDENT '=' constExpression ';' ;
+
+// -------------------------------------------------------------------
+// TYPE DECLARATIONS
+// -------------------------------------------------------------------
+
 typeSection : 'type' (typeDeclaration)+ ;
 
-typeDeclaration : attributeSection* IDENT genericDecl? '=' typeDefinition ';'
-                | attributeSection* IDENT genericDecl? '=' 'type' typeDefinition ';' ;
+typeDeclaration : attributeSection* IDENT genericDecl? '=' 'type'? typeDefinition portabilityDirective* ';' ;
 
 // All possible type definitions
 typeDefinition : typeId
+               | enumeratedType
+               | subrangeType
                | arrayType
                | recordType
                | setType
@@ -127,13 +187,31 @@ typeDefinition : typeId
                | proceduralType
                | variantType
                | classType
+               | classForwardDecl
                | interfaceType
+               | interfaceForwardDecl
+               | dispInterfaceType
                | classRefType
                | stringType
-               | helperType ;
+               | helperType
+               | packedType ;
+
+// Packed modifier for compound types
+packedType : 'packed' (arrayType | recordType | setType | fileType | classType) ;
+
+// Forward declarations
+classForwardDecl : 'class' ;
+interfaceForwardDecl : 'interface' ;
+
+// -------------------------------------------------------------------
+// TYPE IDENTIFIERS & GENERICS
+// -------------------------------------------------------------------
 
 // Type identifier with optional generic instance: TList<Integer>
-typeId : IDENT ('.' IDENT)* (genericInstance)? ;
+typeId : qualifiedIdent (genericInstance)? ;
+
+// Qualified identifier: Unit.Type
+qualifiedIdent : IDENT ('.' IDENT)* ;
 
 // Generic type instance: <Type1, Type2>
 genericInstance : '<' typeList '>' ;
@@ -145,24 +223,30 @@ genericDecl : '<' genericParameter (',' genericParameter)* '>' ;
 
 genericParameter : IDENT (':' constraintList)? ;
 
-constraintList : constraint (';' constraint)* ;
+constraintList : constraint (',' constraint)* ;
 
 constraint : 'class' | 'constructor' | 'record' | typeId ;
 
-// Helper types (XE3+): record helper for Integer
-helperType : 'record' 'helper' 'for' typeId helperBody 'end'
-           | 'class' 'helper' 'for' typeId helperBody 'end' ;
+// -------------------------------------------------------------------
+// HELPER TYPES (XE3+)
+// -------------------------------------------------------------------
+
+helperType : ('record' | 'class') 'helper' ('(' typeId ')')? 'for' typeId
+             helperBody 'end' ;
 
 helperBody : (helperMember)* ;
 
 helperMember : attributeSection* fieldDecl ';'
-             | attributeSection* methodDeclaration
+             | attributeSection* methodHeadingInType
              | attributeSection* propertyDeclaration ;
 
-// Array types: array[1..10] of Integer; array of String
-arrayType : 'array' ('[' ordinalType (',' ordinalType)* ']')? 'of' typeDefinition
-          | 'packed' 'array' '[' ordinalType (',' ordinalType)* ']' 'of' typeDefinition
-          | 'array' 'of' typeDefinition ;  // Dynamic arrays
+// -------------------------------------------------------------------
+// ARRAY TYPES
+// -------------------------------------------------------------------
+
+arrayType : 'array' '[' ordinalType (',' ordinalType)* ']' 'of' typeDefinition  // Static
+          | 'array' 'of' 'const'                                                 // Open array of const
+          | 'array' 'of' typeDefinition ;                                         // Dynamic
 
 // Ordinal types for array indices
 ordinalType : subrangeType | enumeratedType | typeId ;
@@ -170,22 +254,28 @@ ordinalType : subrangeType | enumeratedType | typeId ;
 // Subrange: 1..100
 subrangeType : constExpression '..' constExpression ;
 
-// Enumeration: (value1, value2, value3)
-enumeratedType : '(' identList ')' ;
+// Enumeration: (value1 = 0, value2, value3 = 5)
+enumeratedType : '(' enumeratedElement (',' enumeratedElement)* ')' ;
 
-// Record types with optional variant part
-recordType : 'packed'? 'record' recordBody 'end' ;
+enumeratedElement : IDENT ('=' constExpression)? ;
+
+// -------------------------------------------------------------------
+// RECORD TYPES
+// -------------------------------------------------------------------
+
+recordType : 'record' recordBody 'end' ;
 
 recordBody : (recordMember)* (variantSection)? ;
 
-// Record members: fields, methods, properties, nested declarations
+// Record members: fields, methods, properties, nested declarations, operators
 recordMember : attributeSection* fieldDecl ';'
-             | attributeSection* methodDeclaration
+             | attributeSection* methodHeadingInType
              | attributeSection* propertyDeclaration
              | attributeSection* recordConstSection
              | attributeSection* recordTypeSection
              | attributeSection* recordVarSection
-             | attributeSection* operatorDeclaration ;
+             | attributeSection* operatorDeclaration
+             | classMemberVisibility ;
 
 // Nested const section in record
 recordConstSection : 'const' (constDeclaration)+ ;
@@ -194,7 +284,9 @@ recordConstSection : 'const' (constDeclaration)+ ;
 recordTypeSection : 'type' (typeDeclaration)+ ;
 
 // Nested var section in record
-recordVarSection : 'var' identList ':' typeDefinition ';' ;
+recordVarSection : 'var' (varDeclarationInRecord)+ ;
+
+varDeclarationInRecord : attributeSection* identList ':' typeDefinition ';' ;
 
 // Record field list
 fieldList : fieldDecl (';' fieldDecl)* ;
@@ -203,31 +295,40 @@ fieldDecl : identList ':' typeDefinition ;
 
 // Variant records: case selector of options
 variantSection : 'case' (IDENT ':')? typeId 'of'
-                variantGroup (';' variantGroup)* ;
+                 variantGroup (';' variantGroup)* ';'? ;
 
-variantGroup : constExpression (',' constExpression)* ':' '(' (fieldList)? ')' ;
+variantGroup : constExpression (',' constExpression)* ':' '(' (fieldList ';'?)? ')' ;
 
-// Set types: set of Byte
+// -------------------------------------------------------------------
+// SET, FILE, POINTER TYPES
+// -------------------------------------------------------------------
+
 setType : 'set' 'of' ordinalType ;
 
-// File types: file of Record; file (untyped)
 fileType : 'file' ('of' typeDefinition)? ;
 
-// Pointer types: ^Integer
 pointerType : '^' typeId ;
 
-// Procedural types and method references
+// -------------------------------------------------------------------
+// PROCEDURAL TYPES & METHOD REFERENCES
+// -------------------------------------------------------------------
+
 proceduralType : procedureType | functionType | methodReferenceType ;
 
-// Method reference (anonymous method): reference to procedure
+// Method reference (anonymous method): reference to procedure/function
 methodReferenceType : 'reference' 'to' (procedureType | functionType) ;
 
-procedureType : 'procedure' (formalParameterList)? ('of' 'object')? ;
+procedureType : 'procedure' ('(' formalParameterSection (';' formalParameterSection)* ')')? ('of' 'object')? callingConvention? ;
 
-functionType : 'function' (formalParameterList)? ':' resultType ('of' 'object')? ;
+functionType : 'function' ('(' formalParameterSection (';' formalParameterSection)* ')')? ':' resultType ('of' 'object')? callingConvention? ;
 
-// Class declarations with inheritance and members
-classType : 'class' ('sealed' | 'abstract')? (heritage)? (classBody)? 'end' ;
+callingConvention : 'cdecl' | 'pascal' | 'register' | 'safecall' | 'stdcall' | 'winapi' ;
+
+// -------------------------------------------------------------------
+// CLASS DECLARATIONS
+// -------------------------------------------------------------------
+
+classType : 'class' ('sealed' | 'abstract')? (heritage)? classBody 'end' ;
 
 // Class inheritance: (BaseClass, Interface1, Interface2)
 heritage : '(' classTypeList ')' ;
@@ -237,31 +338,76 @@ classTypeList : typeId (',' typeId)* ;
 classBody : (classMemberSection)* ;
 
 // Class sections with visibility modifiers
-classMemberSection : (classVisibility)? (classMember)+ ;
+classMemberSection : (classMemberVisibility)? (classMember)+ ;
 
-classVisibility : 'private' | 'protected' | 'public' | 'published' 
-                | 'strict' ('private' | 'protected') ;
+classMemberVisibility : 'private'
+                      | 'protected'
+                      | 'public'
+                      | 'published'
+                      | 'strict' 'private'
+                      | 'strict' 'protected' ;
 
-// Class members: fields, methods, properties
+// Class members: fields, methods, properties, class vars, nested types/consts
 classMember : attributeSection* fieldDecl ';'
-            | attributeSection* methodDeclaration
+            | attributeSection* methodHeadingInType
             | attributeSection* propertyDeclaration
-            | attributeSection* classVarDecl ';' ;
+            | attributeSection* classVarSection
+            | attributeSection* classConstSection
+            | attributeSection* classTypeSection ;
 
 // Class variables: class var Field: Type;
-classVarDecl : 'class' 'var' identList ':' typeDefinition ;
+classVarSection : 'class' 'var' (varDeclarationInRecord)+ ;
 
-// All method types
-methodDeclaration : procedureDeclaration
-                  | functionDeclaration
-                  | constructorDeclaration
-                  | destructorDeclaration
-                  | operatorDeclaration ;
+// Nested const in class
+classConstSection : 'const' (constDeclaration)+ ;
 
-// Operator overloading: class operator Add(a, b: T): T;
-operatorDeclaration : 'class' 'operator' operatorName '(' formalParameterList ')' ':' resultType ';' (directive)* ;
+// Nested type in class
+classTypeSection : 'type' (typeDeclaration)+ ;
 
-// Supported operator names
+// -------------------------------------------------------------------
+// METHOD HEADINGS (inside type declarations)
+// -------------------------------------------------------------------
+
+// Unified method headings inside class/record/interface types
+methodHeadingInType : ('class')? 'procedure' IDENT genericDecl? ('(' formalParameterSection (';' formalParameterSection)* ')')? ';' methodDirectiveList
+                    | ('class')? 'function' IDENT genericDecl? ('(' formalParameterSection (';' formalParameterSection)* ')')? ':' resultType ';' methodDirectiveList
+                    | 'constructor' IDENT ('(' formalParameterSection (';' formalParameterSection)* ')')? ';' methodDirectiveList
+                    | 'destructor' IDENT ('(' formalParameterSection (';' formalParameterSection)* ')')? ';' methodDirectiveList ;
+
+// Method directives can appear after the semicolon
+methodDirectiveList : (methodDirective ';')* ;
+
+methodDirective : 'virtual'
+                | 'dynamic'
+                | 'abstract'
+                | 'override'
+                | 'overload'
+                | 'reintroduce'
+                | 'static'
+                | 'inline'
+                | 'final'
+                | 'cdecl'
+                | 'pascal'
+                | 'register'
+                | 'safecall'
+                | 'stdcall'
+                | 'winapi'
+                | 'varargs'
+                | 'message' constExpression
+                | 'deprecated' (STRING)?
+                | 'platform'
+                | 'experimental'
+                | 'library'
+                | 'unsafe' ;
+
+// -------------------------------------------------------------------
+// OPERATOR OVERLOADING
+// -------------------------------------------------------------------
+
+operatorDeclaration : 'class' 'operator' operatorName
+                      '(' formalParameterSection (';' formalParameterSection)* ')'
+                      ':' resultType ';' (methodDirective ';')* ;
+
 operatorName : 'implicit' | 'explicit' | 'negative' | 'positive' | 'inc' | 'dec'
              | 'logicalnot' | 'trunc' | 'round' | 'in' | 'equal' | 'notequal'
              | 'greaterthan' | 'greaterthanorequal' | 'lessthan' | 'lessthanorequal'
@@ -269,146 +415,222 @@ operatorName : 'implicit' | 'explicit' | 'negative' | 'positive' | 'inc' | 'dec'
              | 'leftshift' | 'rightshift' | 'logicaland' | 'logicalor' | 'logicalxor'
              | 'bitwiseand' | 'bitwiseor' | 'bitwisexor' ;
 
-constructorDeclaration : 'constructor' IDENT (formalParameterList)? ';' (directive)* ;
+// -------------------------------------------------------------------
+// PROPERTIES
+// -------------------------------------------------------------------
 
-destructorDeclaration : 'destructor' IDENT (formalParameterList)? ';' (directive)* ;
+// Properties with read/write/index specifiers and array indexers
+propertyDeclaration : ('class')? 'property' IDENT (propertyIndex)? (':' typeDefinition)? (propertySpecifier)* ';' (propertyDefault ';')? ;
 
-// Properties with read/write specifiers
-propertyDeclaration : 'property' IDENT (':' typeId)? (propertyInterface)* ';' (directive)* ;
+// Array property index: property Items[Index: Integer]: T
+propertyIndex : '[' propertyParameterList ']' ;
 
-propertyInterface : 'read' fieldDesignator
-                  | 'write' fieldDesignator
-                  | 'stored' (IDENT | constExpression)
-                  | 'default' constExpression
-                  | 'nodefault'
-                  | 'implements' typeId ;
+propertyParameterList : propertyParameter (';' propertyParameter)* ;
 
-// Interface declarations with optional GUID
-interfaceType : 'interface' (heritage)? ('(' GUID ')')? (interfaceBody)? 'end' ;
+propertyParameter : ('const' | 'var')? identList ':' typeId ;
+
+propertySpecifier : 'read' qualifiedIdent
+                  | 'write' qualifiedIdent
+                  | 'stored' (qualifiedIdent | constExpression)
+                  | 'index' constExpression
+                  | 'implements' typeId (',' typeId)* ;
+
+propertyDefault : 'default' constExpression?
+                | 'nodefault' ;
+
+// -------------------------------------------------------------------
+// INTERFACE TYPES
+// -------------------------------------------------------------------
+
+interfaceType : 'interface' (heritage)? ('[' GUID ']')? (interfaceBody)? 'end' ;
 
 interfaceBody : (interfaceMember)* ;
 
-interfaceMember : procedureHeading ';'
-                | functionHeading ';'
-                | propertyDeclaration ;
+interfaceMember : attributeSection* 'procedure' IDENT ('(' formalParameterSection (';' formalParameterSection)* ')')? ';' (methodDirective ';')*
+                | attributeSection* 'function' IDENT ('(' formalParameterSection (';' formalParameterSection)* ')')? ':' resultType ';' (methodDirective ';')*
+                | attributeSection* propertyDeclaration ;
 
-// Class reference types: class of TObject
+// -------------------------------------------------------------------
+// DISPINTERFACE TYPES
+// -------------------------------------------------------------------
+
+dispInterfaceType : 'dispinterface' (heritage)? ('[' GUID ']')? (dispInterfaceBody)? 'end' ;
+
+dispInterfaceBody : (dispInterfaceMember)* ;
+
+dispInterfaceMember : 'procedure' IDENT ('(' formalParameterSection (';' formalParameterSection)* ')')? ';' dispDirectiveList
+                    | 'function' IDENT ('(' formalParameterSection (';' formalParameterSection)* ')')? ':' resultType ';' dispDirectiveList
+                    | propertyDeclaration
+                    | 'dispid' constExpression ';' ;
+
+dispDirectiveList : ('dispid' constExpression ';')? ;
+
+// -------------------------------------------------------------------
+// CLASS REFERENCE TYPES
+// -------------------------------------------------------------------
+
 classRefType : 'class' 'of' typeId ;
 
-// String types with optional length specifiers
+// -------------------------------------------------------------------
+// STRING TYPES
+// -------------------------------------------------------------------
+
 stringType : 'string' ('[' constExpression ']')?
            | 'ansistring' ('(' constExpression ')')?
            | 'widestring'
-           | 'unicodestring' ;
+           | 'unicodestring'
+           | 'shortstring'
+           | 'rawbytestring'
+           | 'utf8string' ;
 
 // Variant types for dynamic typing
 variantType : 'variant' | 'olevariant' ;
 
-// Variable declarations: var Name: Type;
+// -------------------------------------------------------------------
+// VARIABLE DECLARATIONS
+// -------------------------------------------------------------------
+
 varSection : 'var' (varDeclaration)+ ;
 
-varDeclaration : attributeSection* identList ':' typeDefinition ('=' constExpression)? ';'
-               | attributeSection* identList ':' typeDefinition 'absolute' (IDENT | constExpression) ';'
-               | attributeSection* '[' 'weak' ']' IDENT ':' typeDefinition ';' ;  // Weak references
+threadvarSection : 'threadvar' (varDeclaration)+ ;
+
+varDeclaration : attributeSection* identList ':' typeDefinition ('=' constExpression)? portabilityDirective* ';'
+               | attributeSection* identList ':' typeDefinition 'absolute' (qualifiedIdent | constExpression) ';'
+               | attributeSection* '[' 'weak' ']' IDENT ':' typeDefinition ';'
+               | attributeSection* '[' 'unsafe' ']' IDENT ':' typeDefinition ';' ;
 
 // Inline variables (Delphi 10.3+): var x := value;
 inlineVarDecl : 'var' IDENT (':' typeDefinition)? ':=' expression
-              | 'const' IDENT (':' typeDefinition)? '=' constExpression ;
+              | 'const' IDENT (':' typeDefinition)? ':=' expression ;
 
 // Comma-separated identifier lists
 identList : IDENT (',' IDENT)* ;
 
-// Label declarations for goto statements
+// -------------------------------------------------------------------
+// LABEL DECLARATIONS
+// -------------------------------------------------------------------
+
 labelDeclSection : 'label' labelId (',' labelId)* ';' ;
 
 labelId : IDENT | NUMBER ;
 
-// Procedure declarations with optional nested functions
-procedureDeclaration : procedureHeading ';' (directive)* (nestedDeclaration)* block ';' ;
+// -------------------------------------------------------------------
+// PROCEDURE / FUNCTION DECLARATIONS (implementation)
+// -------------------------------------------------------------------
 
-functionDeclaration : functionHeading ';' (directive)* (nestedDeclaration)* block ';' ;
+// Qualified names for method implementations: TMyClass.MethodName
+// Also supports generic types: TMyClass<T>.MethodName
+procedureDeclaration : attributeSection* ('class')? procedureHeading ';' directiveList (nestedDeclaration)* block ';'
+                     | attributeSection* ('class')? procedureHeading ';' 'external' externalSpecifier ';'
+                     | attributeSection* ('class')? procedureHeading ';' 'forward' ';' ;
 
-// Nested procedures/functions (Pascal feature)
+functionDeclaration : attributeSection* ('class')? functionHeading ';' directiveList (nestedDeclaration)* block ';'
+                    | attributeSection* ('class')? functionHeading ';' 'external' externalSpecifier ';'
+                    | attributeSection* ('class')? functionHeading ';' 'forward' ';' ;
+
+constructorImpl : attributeSection* 'constructor' qualifiedMethodName
+                  ('(' formalParameterSection (';' formalParameterSection)* ')')? ';'
+                  directiveList (nestedDeclaration)* block ';' ;
+
+destructorImpl : attributeSection* 'destructor' qualifiedMethodName
+                 ('(' formalParameterSection (';' formalParameterSection)* ')')? ';'
+                 directiveList (nestedDeclaration)* block ';' ;
+
+// External procedure linkage
+externalSpecifier : (STRING | qualifiedIdent)? ('name' constExpression)? ('index' constExpression)? ('delayed')? ;
+
+// Nested procedures/functions
 nestedDeclaration : procedureDeclaration | functionDeclaration ;
 
-// Procedure/function headers
-procedureHeading : 'procedure' IDENT genericDecl? (formalParameterList)? ;
+// Procedure/function headers with qualified names for implementations
+procedureHeading : 'procedure' qualifiedMethodName genericDecl?
+                   ('(' formalParameterSection (';' formalParameterSection)* ')')? ;
 
-functionHeading : 'function' IDENT genericDecl? (formalParameterList)? ':' resultType ;
+functionHeading : 'function' qualifiedMethodName genericDecl?
+                  ('(' formalParameterSection (';' formalParameterSection)* ')')? ':' resultType ;
 
-// Parameter lists: (param1: Type; var param2: Type)
-formalParameterList : '(' formalParameterSection (';' formalParameterSection)* ')' ;
+// Qualified method name: TClass.Method or TClass<T>.Method
+qualifiedMethodName : IDENT (genericInstance? '.' IDENT)* ;
 
-formalParameterSection : parameterGroup
-                       | 'var' parameterGroup      // By reference
-                       | 'const' parameterGroup    // Read-only reference
-                       | 'out' parameterGroup ;    // Output parameter
+// -------------------------------------------------------------------
+// PARAMETERS
+// -------------------------------------------------------------------
+
+formalParameterSection : parameterModifier? parameterGroup ;
+
+parameterModifier : 'var' | 'const' | 'out' | '[' 'ref' ']' ;
 
 parameterGroup : identList (':' parameterType)? ('=' constExpression)? ;
 
-// Parameter types with optional array modifier
-parameterType : ('array' 'of')? typeId ;
+parameterType : 'array' 'of' 'const'      // Open array of const
+              | 'array' 'of' typeId        // Open array
+              | typeId ;
 
-resultType : typeId ;
+resultType : typeDefinition ;
 
-// Procedure/function directives
+// -------------------------------------------------------------------
+// DIRECTIVES
+// -------------------------------------------------------------------
+
 directive : 'inline'
           | 'assembler'
-          | 'forward'
-          | 'external' (STRING)? ('name' STRING)?
-          | 'public' ('name' STRING)?
-          | 'export'
-          | 'far'
-          | 'near'
-          | 'resident'
+          | 'overload'
+          | 'reintroduce'
           | 'virtual'
           | 'dynamic'
           | 'abstract'
           | 'override'
-          | 'overload'
-          | 'reintroduce'
+          | 'final'
           | 'static'
-          | 'cdecl'
-          | 'pascal'
-          | 'register'
-          | 'safecall'
-          | 'stdcall'
+          | callingConvention
           | 'varargs'
           | 'local'
-          | 'platform'
-          | 'deprecated' (STRING)?
-          | 'library'
-          | 'experimental'
-          | 'unsafe'
-          | 'final' ;
+          | 'export'
+          | portabilityDirective
+          | 'message' constExpression
+          | 'dispid' constExpression ;
 
-// Code blocks with declarations and statements
+portabilityDirective : 'platform'
+                     | 'deprecated' (STRING)?
+                     | 'library'
+                     | 'experimental'
+                     | 'unsafe' ;
+
+// -------------------------------------------------------------------
+// BLOCKS & STATEMENTS
+// -------------------------------------------------------------------
+
 block : (declarationSection)* compoundStatement ;
 
-// Compound statements: begin..end
 compoundStatement : 'begin' statementList 'end' ;
 
-statementList : statement (';' statement)* ;
+statementList : (statement (';' statement)*)? ;
 
-// All statement types
 statement : simpleStatement
           | structuredStatement
-          | inlineVarDecl          // Inline variable declarations
+          | inlineVarDecl
           | labelStatement ;
 
-// Labeled statements for goto
 labelStatement : labelId ':' statement ;
 
-// Simple statements: assignments, calls, control flow
-simpleStatement : designator ':=' expression          // Assignment
-                | designator ('(' expressionList ')')? // Method call
-                | 'inherited' (IDENT ('(' expressionList ')')?)? // Inherited call
-                | 'goto' labelId                      // Goto statement
-                | 'raise' (expression ('at' expression)?)? // Exception raising
-                | 'exit' ('(' expression ')')?        // Exit with optional result
-                | /* empty */ ;                       // Empty statement
+// -------------------------------------------------------------------
+// SIMPLE STATEMENTS
+// -------------------------------------------------------------------
 
-// Structured statements: compounds, conditionals, loops, etc.
+simpleStatement : designator ':=' expression                          // Assignment
+                | designator '+=' expression                          // Addition assignment (non-standard but widely used)
+                | designator '-=' expression                          // Subtraction assignment
+                | designator                                          // Method call (parameterless or via designator)
+                | 'inherited' (IDENT ('(' expressionList ')')?)?      // Inherited call
+                | 'goto' labelId                                      // Goto
+                | 'raise' (expression ('at' expression)?)?            // Exception raising
+                | 'exit' ('(' expression ')')?                        // Exit with optional result
+                | /* empty */ ;                                        // Empty statement
+
+// -------------------------------------------------------------------
+// STRUCTURED STATEMENTS
+// -------------------------------------------------------------------
+
 structuredStatement : compoundStatement
                     | conditionalStatement
                     | loopStatement
@@ -416,191 +638,203 @@ structuredStatement : compoundStatement
                     | exceptionStatement
                     | assemblerStatement ;
 
-// Conditional statements: if and case
+// Conditional statements
 conditionalStatement : ifStatement | caseStatement ;
 
-// If-then-else statements
 ifStatement : 'if' expression 'then' statement ('else' statement)? ;
 
-// Case statements with optional else clause
 caseStatement : 'case' expression 'of'
-               caseSelector (';' caseSelector)*
-               ('else' statementList)?
-               'end' ;
+                caseSelector (';' caseSelector)*
+                (';'? 'else' statementList (';')?)?
+                'end' ;
 
 caseSelector : caseLabelList ':' statement ;
 
 caseLabelList : caseLabel (',' caseLabel)* ;
 
-// Case labels with optional ranges: 1, 2..5, 'A'..'Z'
 caseLabel : constExpression ('..' constExpression)? ;
 
-// Loop statements: repeat, while, for
+// -------------------------------------------------------------------
+// LOOP STATEMENTS
+// -------------------------------------------------------------------
+
 loopStatement : repeatStatement
               | whileStatement
               | forStatement ;
 
-// Repeat-until loops
 repeatStatement : 'repeat' statementList 'until' expression ;
 
-// While-do loops
 whileStatement : 'while' expression 'do' statement ;
 
-// For loops: for-to/downto and for-in with inline variables
-forStatement : 'for' (inlineVarDecl | IDENT ':=' expression) ('to' | 'downto') expression 'do' statement
-             | 'for' (inlineVarDecl | IDENT) 'in' expression 'do' statement ;
+forStatement : 'for' forLoopVar ':=' expression ('to' | 'downto') expression 'do' statement
+             | 'for' forInVar 'in' expression 'do' statement ;
 
-// With statements for record access
-withStatement : 'with' designator (',' designator)* 'do' statement ;
+// For-loop variable: plain IDENT or inline var
+forLoopVar : IDENT
+           | 'var' IDENT (':' typeDefinition)? ;
 
-// Exception handling: try-except and try-finally
+forInVar : IDENT
+         | 'var' IDENT (':' typeDefinition)? ;
+
+// -------------------------------------------------------------------
+// WITH STATEMENT
+// -------------------------------------------------------------------
+
+withStatement : 'with' expression (',' expression)* 'do' statement ;
+
+// -------------------------------------------------------------------
+// EXCEPTION HANDLING
+// -------------------------------------------------------------------
+
 exceptionStatement : tryExceptStatement | tryFinallyStatement ;
 
 tryExceptStatement : 'try' statementList 'except' exceptionBlock 'end' ;
 
 tryFinallyStatement : 'try' statementList 'finally' statementList 'end' ;
 
-exceptionBlock : (exceptionHandler)* ('else' statementList)? ;
+exceptionBlock : (exceptionHandler (';')?)+ ('else' statementList)?
+               | statementList ;
 
-// Exception handlers: on Exception do statement
 exceptionHandler : 'on' (IDENT ':')? typeId 'do' statement ;
 
-// Inline assembly blocks with proper x86/x64 syntax
-assemblerStatement : 'asm' assemblerInstructionList 'end' ;
+// -------------------------------------------------------------------
+// INLINE ASSEMBLY
+// -------------------------------------------------------------------
 
-assemblerInstructionList : (assemblerInstruction | assemblerLabel | assemblerComment | assemblerDirective)* ;
+assemblerStatement : 'asm' asmContent 'end' ;
 
-assemblerInstruction : mnemonicName (operandList)? ;
+// Assembly content is treated as opaque text until 'end'
+// Full assembly parsing requires a separate mode/grammar
+asmContent : (~'end')* ;
 
-mnemonicName : ASM_INSTRUCTION ;
+// -------------------------------------------------------------------
+// EXPRESSIONS
+// -------------------------------------------------------------------
 
-operandList : operand (',' operand)* ;
-
-operand : register
-        | immediate
-        | memoryOperand
-        | pascalIdentifier       // Access to Pascal variables
-        | assemblerExpression ;
-
-register : ASM_REGISTER ;
-
-immediate : ASM_NUMBER | ASM_HEX_NUMBER ;
-
-// Memory operands: [eax], [ebp+8], [eax+ebx*2+4]
-memoryOperand : '[' memoryExpression ']' ;
-
-memoryExpression : register
-                 | register ('+' | '-') immediate
-                 | register ('+' | '-') register
-                 | register ('+' | '-') register '*' scaleFactor
-                 | register ('+' | '-') register '*' scaleFactor ('+' | '-') immediate ;
-
-scaleFactor : '1' | '2' | '4' | '8' ;
-
-// Pascal variable/constant access in assembly
-pascalIdentifier : IDENT ;
-
-assemblerExpression : operand (asmOperator operand)* ;
-
-asmOperator : '+' | '-' | '*' | '/' | 'and' | 'or' | 'xor' | 'shl' | 'shr' ;
-
-// Assembly labels: @@Label:
-assemblerLabel : ASM_LABEL ':' ;
-
-assemblerComment : ASM_COMMENT ;
-
-assemblerDirective : ASM_DIRECTIVE ;
-
-// Expression hierarchy: relational -> additive -> multiplicative -> factors
 expression : simpleExpression (relOp simpleExpression)? ;
 
 simpleExpression : ('+' | '-')? term (addOp term)* ;
 
 term : factor (mulOp factor)* ;
 
-// Factors: variables, literals, function calls, operators
 factor : designator ('(' expressionList ')')?        // Variable access or function call
        | '@' designator                              // Address operator
+       | '@' '@' designator                          // Double address-of (procedural)
        | NUMBER                                      // Numeric literals
        | STRING                                      // String literals
        | MULTILINESTRING                             // Multiline strings (Delphi 12+)
        | NIL                                         // Nil pointer
-       | 'True' | 'False'                           // Boolean literals
-       | '(' expression ')'                         // Parenthesized expression
-       | 'not' factor                               // Boolean negation
-       | bracketConstructor                         // Set/array constructors
-       | 'inherited' IDENT                          // Inherited identifier
-       | anonymousMethod                            // Anonymous method literal
-       | 'typeof' '(' typeId ')'                    // Type reference operator
-       | 'sizeof' '(' (typeId | designator) ')'    // Size operator
-       | typeId '(' expression ')' ;                // Type casting
+       | 'True' | 'False'                            // Boolean literals
+       | '(' expression ')'                          // Parenthesized expression
+       | 'not' factor                                // Boolean/bitwise negation
+       | bracketConstructor                          // Set/array constructors
+       | 'inherited' (IDENT ('(' expressionList ')')?)? // Inherited expression
+       | anonymousMethod                             // Anonymous method literal
+       | 'typeof' '(' typeId ')'                     // Type reference operator
+       | 'sizeof' '(' (typeId | designator) ')'      // Size operator
+       | 'default' '(' typeId ')'                    // Default value (generics)
+       | 'assigned' '(' expression ')'               // Assigned check
+       | 'low' '(' (typeId | expression) ')'         // Low bound
+       | 'high' '(' (typeId | expression) ')'        // High bound
+       | 'length' '(' expression (',' expression)? ')' // Length function
+       | 'pred' '(' expression ')'                   // Predecessor
+       | 'succ' '(' expression ')'                   // Successor
+       | 'ord' '(' expression ')'                    // Ordinal value
+       | 'chr' '(' expression ')'                    // Character from ordinal
+       | 'abs' '(' expression ')'                    // Absolute value
+       | 'include' '(' expression ',' expression ')' // Set include
+       | 'exclude' '(' expression ',' expression ')' // Set exclude
+       | typeId '(' expression ')' ;                  // Type casting
 
 // Anonymous method literals (Delphi 2009+)
-anonymousMethod : 'procedure' (formalParameterList)? block
-                | 'function' (formalParameterList)? ':' resultType block ;
+anonymousMethod : 'procedure' ('(' formalParameterSection (';' formalParameterSection)* ')')? block
+                | 'function' ('(' formalParameterSection (';' formalParameterSection)* ')')? ':' resultType block ;
 
 // Unified constructor for sets and dynamic arrays: [1, 2, 3]
 bracketConstructor : '[' (constructorElementList)? ']' ;
 
 constructorElementList : constructorElement (',' constructorElement)* ;
 
-// Constructor elements with optional ranges for sets: 1..10
 constructorElement : expression ('..' expression)? ;
 
-// Designators: variable.field[index]^
-designator : IDENT ('.' IDENT | '[' expressionList ']' | '^')* ;
+// -------------------------------------------------------------------
+// DESIGNATORS
+// -------------------------------------------------------------------
 
-fieldDesignator : IDENT ;
+// Designators: variable.field[index]^<GenericArgs>
+designator : qualifiedIdent (designatorPart)* ;
+
+designatorPart : '.' IDENT
+               | '[' expressionList ']'
+               | '^'
+               | '(' expressionList ')'     // Function/method call
+               | '(' ')'                    // Parameterless function call with parens
+               | genericInstance ;           // Generic instantiation
+
+fieldDesignator : qualifiedIdent ;
 
 // Expression lists for parameters and array indices
 expressionList : expression (',' expression)* ;
 
-// Relational operators
-relOp : '=' | '<>' | '<' | '<=' | '>' | '>=' | 'in' | 'is' | 'as' ;
+// -------------------------------------------------------------------
+// OPERATORS
+// -------------------------------------------------------------------
 
-// Additive operators
+relOp : '='  | '<>' | '<'  | '<=' | '>'  | '>='
+      | 'in' | 'is' | 'as' ;
+
 addOp : '+' | '-' | 'or' | 'xor' ;
 
-// Multiplicative operators
 mulOp : '*' | '/' | 'div' | 'mod' | 'and' | 'shl' | 'shr' ;
 
-// ===================================================================
+// -------------------------------------------------------------------
 // LEXER RULES
-// ===================================================================
+// -------------------------------------------------------------------
 
 // Identifiers: names for variables, types, etc.
-IDENT : [a-zA-Z_][a-zA-Z0-9_]* ;
+// Note: Delphi identifiers are case-insensitive; handle in semantic layer
+// Identifiers may also use & prefix to escape keywords: &type, &begin
+IDENT : '&'? [a-zA-Z_][a-zA-Z0-9_]* ;
 
-// Numeric literals: decimal, hex, octal, binary, character codes
-NUMBER : [0-9]+ ('.' [0-9]+)? (('E' | 'e') ('+' | '-')? [0-9]+)?  // Decimal with optional exponent
-       | '$' [0-9A-Fa-f]+                                          // Hexadecimal: $FF
-       | '&' [0-7]+                                                // Octal: &777
-       | '%' [01]+                                                 // Binary: %1010
-       | '#' [0-9]+                                               // Character code: #13
-       | '#' '$' [0-9A-Fa-f]+ ;                                   // Hex character: #$0D
+// Numeric literals
+NUMBER : DIGIT+ ('.' DIGIT+)? (('E' | 'e') ('+' | '-')? DIGIT+)?  // Decimal/float
+       | '$' HEX_DIGIT+                                             // Hexadecimal: $FF
+       | '&' [0-7]+                                                 // Octal: &777 (rare)
+       | '%' [01]+ ;                                                // Binary: %1010
 
-// String literals with escape sequences
-STRING : '\'' (~['\r\n] | '\'\'')* '\''                          // Single-quoted strings with '' escape
-       | '"' (~["\r\n] | '""')* '"'                              // Double-quoted strings with "" escape
-       | '#' [0-9]+                                              // Character literal
-       | '#' '$' [0-9A-Fa-f]+ ;                                  // Hex character literal
+// Character literal sequences: #13#10, #$0D#$0A
+CHAR_LITERAL : ('#' (DIGIT+ | '$' HEX_DIGIT+))+ ;
+
+// String literals with embedded character codes
+STRING : ( '\'' (~['\r\n] | '\'\'')* '\'' | CHAR_LITERAL )
+         ( ( '\'' (~['\r\n] | '\'\'')* '\'' | CHAR_LITERAL ) )* ;
 
 // Multiline string literals (Delphi 12+): '''content'''
 MULTILINESTRING : '\'\'\'' .*? '\'\'\'' ;
 
-// GUID literals: {12345678-1234-1234-1234-123456789ABC}
-GUID : '{' [0-9A-Fa-f]{8} '-' [0-9A-Fa-f]{4} '-' [0-9A-Fa-f]{4} '-' [0-9A-Fa-f]{4} '-' [0-9A-Fa-f]{12} '}' ;
+// GUID literals: ['{12345678-1234-1234-1234-123456789ABC}']
+// GUIDs in Delphi are typically strings, but the interface GUID is in brackets
+GUID : '\'' '{' HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT
+       '-' HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT
+       '-' HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT
+       '-' HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT
+       '-' HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT
+       '}' '\'' ;
 
 // Nil keyword
 NIL : 'nil' ;
 
-// Whitespace: spaces, tabs, newlines (ignored)
+// Lexer fragments
+fragment DIGIT : [0-9] ;
+fragment HEX_DIGIT : [0-9A-Fa-f] ;
+
+// Whitespace (ignored)
 WS : [ \t\r\n]+ -> skip ;
 
-// Comments: {}, (*..*), //
-COMMENT : '{' (~[}])* '}' -> skip                                // Brace comments
-        | '(*' .*? '*)' -> skip                                  // Parenthesis comments
-        | '//' ~[\r\n]* -> skip ;                                // Line comments
+// Comments (ignored)
+COMMENT : '{' ~[$] ~[}]* '}' -> skip ;       // Brace comments (not directives)
+BLOCK_COMMENT : '(*' .*? '*)' -> skip ;       // Parenthesis comments
+LINE_COMMENT : '//' ~[\r\n]* -> skip ;        // Line comments
 
-// Compiler directives: {$IFDEF}, {$INCLUDE}, etc. (ignored)
-COMPILER_DIRECTIVE : '{$' (~[}])* '}' -> skip ;
+// Compiler directives (ignored for parsing purposes)
+COMPILER_DIRECTIVE : '{$' ~[}]* '}' -> skip ;
